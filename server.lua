@@ -1,320 +1,322 @@
 local RSGCore = exports['rsg-core']:GetCoreObject()
-
--- Track overdue warnings
-local overdueWarnings = {}
-
--- Check for overdue payments (runs every hour)
-CreateThread(function()
-    while true do
-        Wait(3600000) -- 1 hour
-        CheckOverduePayments()
-    end
+RSGCore.Functions.CreateUseableItem("letter", function(source, item)
+    local Player = RSGCore.Functions.GetPlayer(source)
+    if not Player or not item or not item.info then return end
+    
+   
+    TriggerClientEvent('bankloan:client:readLetter', source, {
+        title = item.info.title or "Letter",
+        content = item.info.content or "This letter appears to be blank.",
+        author = item.info.author or "Unknown"
+    })
+    
+    
+    Player.Functions.RemoveItem('letter', 1, item.slot)
+    TriggerClientEvent('inventory:client:ItemBox', source, RSGCore.Shared.Items['letter'], "remove")
 end)
 
--- Send payment reminders (runs every 6 hours)
-CreateThread(function()
-    while true do
-        Wait(21600000) -- 6 hours
-        SendPaymentReminders()
+local function FormatTimestamp(timestamp)
+    if not timestamp then
+        return "Not set"
     end
-end)
-
-function CheckOverduePayments()
-    MySQL.query('SELECT * FROM player_loans WHERE status = ? AND next_payment_due < NOW()', {
-        'active'
-    }, function(overdueLoans)
-        for _, loan in pairs(overdueLoans) do
-            local daysOverdue = math.floor((os.time() - os.time(os.date("*t", os.time{year=string.sub(loan.next_payment_due,1,4), month=string.sub(loan.next_payment_due,6,7), day=string.sub(loan.next_payment_due,9,10)}))) / 86400)
-            
-            -- Initialize warning count
-            overdueWarnings[loan.id] = overdueWarnings[loan.id] or 0
-            
-            -- Escalating consequences based on days overdue
-            if daysOverdue >= 30 then
-                -- 30+ days: Send to collections (major consequences)
-                HandleCollections(loan)
-            elseif daysOverdue >= 21 then
-                -- 21-29 days: Final warning
-                HandleFinalWarning(loan, daysOverdue)
-            elseif daysOverdue >= 14 then
-                -- 14-20 days: Second warning + larger penalty
-                HandleSecondWarning(loan, daysOverdue)
-            elseif daysOverdue >= 7 then
-                -- 7-13 days: First warning + medium penalty
-                HandleFirstWarning(loan, daysOverdue)
-            elseif daysOverdue >= 1 then
-                -- 1-6 days: Late fee only
-                HandleLateFee(loan, daysOverdue)
-            end
+    
+   
+    if type(timestamp) == "number" then
+       
+        if timestamp > 9999999999 then
+            timestamp = math.floor(timestamp / 1000)
         end
-    end)
-end
-
--- 1-6 days overdue: Apply late fee
-function HandleLateFee(loan, daysOverdue)
-    if overdueWarnings[loan.id] >= 1 then return end -- Already processed
-    
-    local lateFee = math.ceil(loan.weekly_payment * 0.10) -- 10% late fee
-    local newBalance = loan.remaining_balance + lateFee
-    
-    MySQL.update('UPDATE player_loans SET remaining_balance = ? WHERE id = ?', {
-        newBalance,
-        loan.id
-    })
-    
-    overdueWarnings[loan.id] = 1
-    
-    local Player = RSGCore.Functions.GetPlayerByCitizenId(loan.citizenid)
-    if Player then
-        SendLoanLetter(Player.PlayerData.source, {
-            title = 'PAYMENT OVERDUE',
-            content = string.format([[
-NOTICE: Payment Overdue
-
-Your loan payment was due %d day(s) ago.
-
-Late Fee Applied: $%d
-New Balance: $%d
-Weekly Payment: $%d
-
-Please make a payment immediately.
-
-Continued non-payment will result in additional penalties.
-
-- %s
-            ]], daysOverdue, lateFee, newBalance, loan.weekly_payment, Config.LetterSettings.Author)
-        })
+        return os.date("%d/%m/%Y at %H:%M", timestamp)
     end
-end
-
--- 7-13 days overdue: First warning + medium penalty
-function HandleFirstWarning(loan, daysOverdue)
-    if overdueWarnings[loan.id] >= 2 then return end
     
-    local additionalFee = math.ceil(loan.weekly_payment * 0.15) -- Additional 15% fee
-    local newBalance = loan.remaining_balance + additionalFee
-    
-    MySQL.update('UPDATE player_loans SET remaining_balance = ? WHERE id = ?', {
-        newBalance,
-        loan.id
-    })
-    
-    overdueWarnings[loan.id] = 2
-    
-    local Player = RSGCore.Functions.GetPlayerByCitizenId(loan.citizenid)
-    if Player then
-        SendLoanLetter(Player.PlayerData.source, {
-            title = '⚠️ FIRST WARNING',
-            content = string.format([[
-URGENT: FIRST WARNING
-
-Your payment is now %d days overdue.
-
-Additional Penalty: $%d
-Current Balance: $%d
-Required Payment: $%d
-
-CONSEQUENCES OF CONTINUED NON-PAYMENT:
-- Additional fees every 7 days
-- Loan sent to collections after 30 days
-- Potential jail time for debt evasion
-
-Pay immediately at any bank location.
-
-- %s
-            ]], daysOverdue, additionalFee, newBalance, loan.weekly_payment, Config.LetterSettings.Author)
-        })
-    end
-end
-
--- 14-20 days overdue: Second warning + larger penalty
-function HandleSecondWarning(loan, daysOverdue)
-    if overdueWarnings[loan.id] >= 3 then return end
-    
-    local additionalFee = math.ceil(loan.weekly_payment * 0.25) -- Additional 25% fee
-    local newBalance = loan.remaining_balance + additionalFee
-    
-    MySQL.update('UPDATE player_loans SET remaining_balance = ? WHERE id = ?', {
-        newBalance,
-        loan.id
-    })
-    
-    overdueWarnings[loan.id] = 3
-    
-    local Player = RSGCore.Functions.GetPlayerByCitizenId(loan.citizenid)
-    if Player then
-        -- Remove some money if they have it
-        if Player.PlayerData.money.cash >= loan.weekly_payment then
-            Player.Functions.RemoveMoney('cash', loan.weekly_payment, "loan-auto-deduction")
-            newBalance = newBalance - loan.weekly_payment
-            
-            MySQL.update('UPDATE player_loans SET remaining_balance = ?, payments_made = payments_made + 1 WHERE id = ?', {
-                newBalance,
-                loan.id
-            })
-            
-            TriggerClientEvent('ox_lib:notify', Player.PlayerData.source, {
-                title = 'Automatic Payment',
-                description = 'Bank collected $' .. loan.weekly_payment .. ' from your cash',
-                type = 'warning',
-                duration = 10000
-            })
+   
+    if type(timestamp) == "string" then
+        local year, month, day, hour, min = string.match(timestamp, "(%d%d%d%d)-(%d%d)-(%d%d) (%d%d):(%d%d)")
+        if year then
+            return string.format("%s/%s/%s at %s:%s", day, month, year, hour, min)
         end
-        
-        SendLoanLetter(Player.PlayerData.source, {
-            title = '⚠️⚠️ SECOND WARNING',
-            content = string.format([[
-SERIOUS WARNING: %d Days Overdue
-
-Your loan is severely overdue.
-
-Additional Penalty: $%d
-Current Balance: $%d
-
-The bank will now attempt to collect payment directly from any cash you carry.
-
-If payment is not received within 10 days, your loan will be sent to collections and you may face jail time.
-
-- %s
-            ]], daysOverdue, additionalFee, newBalance, Config.LetterSettings.Author)
-        })
     end
+    
+    return tostring(timestamp)
 end
 
--- 21-29 days overdue: Final warning
-function HandleFinalWarning(loan, daysOverdue)
-    if overdueWarnings[loan.id] >= 4 then return end
-    
-    local hugeFee = math.ceil(loan.weekly_payment * 0.50) -- 50% penalty
-    local newBalance = loan.remaining_balance + hugeFee
-    
-    MySQL.update('UPDATE player_loans SET remaining_balance = ? WHERE id = ?', {
-        newBalance,
-        loan.id
-    })
-    
-    overdueWarnings[loan.id] = 4
-    
-    local Player = RSGCore.Functions.GetPlayerByCitizenId(loan.citizenid)
-    if Player then
-        SendLoanLetter(Player.PlayerData.source, {
-            title = '🚨 FINAL WARNING 🚨',
-            content = string.format([[
-FINAL NOTICE: %d Days Overdue
 
-This is your FINAL WARNING.
-
-Massive Penalty Applied: $%d
-Total Balance: $%d
-
-Your loan will be sent to COLLECTIONS in less than 10 days.
-
-COLLECTIONS CONSEQUENCES:
-- Arrest warrant issued
-- Jail time for debt evasion
-- All assets seized
-- Unable to get future loans
-
-Pay immediately to avoid legal action!
-
-- %s
-            ]], daysOverdue, hugeFee, newBalance, Config.LetterSettings.Author)
-        })
-    end
-end
-
--- 30+ days overdue: Collections (severe consequences)
-function HandleCollections(loan)
-    if overdueWarnings[loan.id] >= 5 then return end
-    
-    MySQL.update('UPDATE player_loans SET status = ? WHERE id = ?', {
-        'collections',
-        loan.id
-    })
-    
-    overdueWarnings[loan.id] = 5
-    
-    local Player = RSGCore.Functions.GetPlayerByCitizenId(loan.citizenid)
-    if Player then
-        local src = Player.PlayerData.source
-        
-        -- Take all their cash
-        local cashAmount = Player.PlayerData.money.cash
-        if cashAmount > 0 then
-            Player.Functions.RemoveMoney('cash', cashAmount, "loan-collections")
-            
-            -- Apply to loan balance
-            local newBalance = loan.remaining_balance - cashAmount
-            MySQL.update('UPDATE player_loans SET remaining_balance = ? WHERE id = ?', {
-                math.max(0, newBalance),
-                loan.id
-            })
+local function GetInterestRate(amount)
+    local rate = 5
+    for threshold, interestRate in pairs(Config.LoanSettings.InterestRates) do
+        if amount >= threshold then
+            rate = interestRate
         end
-        
-        -- Send to jail (if you have a jail system)
-        -- TriggerEvent('rsg-jail:server:JailPlayer', src, 30, "Debt Evasion")
-        
-        SendLoanLetter(src, {
-            title = '🚨 SENT TO COLLECTIONS 🚨',
-            content = string.format([[
-COLLECTIONS NOTICE
+    end
+    return rate
+end
 
-Your loan has been sent to collections for non-payment.
 
-ACTIONS TAKEN:
-- All cash seized ($%d)
-- Arrest warrant issued
-- Cannot apply for future loans
-- Remaining balance: $%d
+RegisterNetEvent('bankloan:server:applyLoan', function(amount, numPayments)
+    local src = source
+    local Player = RSGCore.Functions.GetPlayer(src)
+    
+    if not Player then return end
 
-You must pay the remaining balance at a bank before you can conduct any business.
-
-This is a serious offense.
-
-- Collections Agency
-            ]], cashAmount, math.max(0, loan.remaining_balance - cashAmount))
-        })
-        
+   
+    if amount < Config.LoanSettings.MinLoanAmount or amount > Config.LoanSettings.MaxLoanAmount then
         TriggerClientEvent('ox_lib:notify', src, {
-            title = '🚨 LOAN IN COLLECTIONS',
-            description = 'Your loan is in collections. All cash seized. Visit a bank immediately.',
-            type = 'error',
-            duration = 15000
+            title = 'Bank',
+            description = 'Invalid loan amount',
+            type = 'error'
         })
-        
-        -- Optional: Notify police
-        -- TriggerEvent('rsg-lawman:server:SendAlert', 'Debt Evasion Warrant', Player.PlayerData.charinfo)
+        return
     end
-end
 
-function SendPaymentReminders()
-    local reminderDate = os.date('%Y-%m-%d %H:%M:%S', os.time() + (Config.LetterSettings.ReminderDaysBefore * 24 * 60 * 60))
-    
-    MySQL.query('SELECT * FROM player_loans WHERE status = ? AND next_payment_due <= ? AND next_payment_due > NOW()', {
+   
+    MySQL.query('SELECT COUNT(*) as count FROM player_loans WHERE citizenid = ? AND (status = ? OR status = ?)', {
+        Player.PlayerData.citizenid,
         'active',
-        reminderDate
-    }, function(upcomingLoans)
-        for _, loan in pairs(upcomingLoans) do
-            local Player = RSGCore.Functions.GetPlayerByCitizenId(loan.citizenid)
-            
-            if Player then
-                SendLoanLetter(Player.PlayerData.source, {
-                    title = 'Payment Reminder',
+        'collections'
+    }, function(result)
+        if result and result[1] and result[1].count >= Config.LoanSettings.MaxActiveLoans then
+            TriggerClientEvent('ox_lib:notify', src, {
+                title = 'Bank',
+                description = 'You have an outstanding loan or debt in collections. Pay it off first.',
+                type = 'error',
+                duration = 8000
+            })
+            return
+        end
+
+        local interestRate = GetInterestRate(amount)
+        local interestAmount = math.ceil(amount * (interestRate / 100))
+        local totalAmount = amount + interestAmount
+        local weeklyPayment = math.ceil(totalAmount / numPayments)
+        
+       
+        local nextPaymentTimestamp = os.time() + (Config.LoanSettings.PaymentFrequency * 24 * 60 * 60)
+        local nextPaymentDate = os.date('%Y-%m-%d %H:%M:%S', nextPaymentTimestamp)
+
+       
+        MySQL.insert('INSERT INTO player_loans (citizenid, loan_amount, remaining_balance, weekly_payment, interest_rate, total_payments, next_payment_due) VALUES (?, ?, ?, ?, ?, ?, ?)', {
+            Player.PlayerData.citizenid,
+            amount,
+            totalAmount,
+            weeklyPayment,
+            interestRate,
+            numPayments,
+            nextPaymentDate
+        }, function(loanId)
+            if loanId then
+                
+                Player.Functions.AddMoney('cash', amount)
+
+                TriggerClientEvent('ox_lib:notify', src, {
+                    title = 'Loan Approved',
+                    description = string.format('Loan of $%d approved!\nWeekly payment: $%d\nInterest rate: %.1f%%', amount, weeklyPayment, interestRate),
+                    type = 'success',
+                    duration = 10000
+                })
+
+               
+                local formattedDueDate = FormatTimestamp(nextPaymentTimestamp)
+                
+                SendLoanLetter(src, {
+                    title = 'Loan Agreement',
                     content = string.format([[
-Payment Reminder
+Dear Valued Customer,
 
-This is a friendly reminder that your loan payment is due soon.
+Your loan application has been approved!
 
-Payment Amount: $%d
-Due Date: %s
-Remaining Balance: $%d
+Loan Amount: $%d
+Interest Rate: %.1f%%
+Total to Repay: $%d
+Weekly Payment: $%d
+Number of Payments: %d
+First Payment Due: %s
 
-Please ensure you have sufficient funds available.
+Please ensure you have sufficient funds for each payment.
 
-- %s
-                    ]], loan.weekly_payment, loan.next_payment_due, loan.remaining_balance, Config.LetterSettings.Author)
+WARNING: Late payments incur penalties.
+After 30 days overdue, your loan goes to collections.
+
+Best regards,
+%s
+                    ]], amount, interestRate, totalAmount, weeklyPayment, numPayments, formattedDueDate, Config.LetterSettings.Author)
                 })
             end
+        end)
+    end)
+end)
+
+
+RegisterNetEvent('bankloan:server:getActiveLoans', function()
+    local src = source
+    local Player = RSGCore.Functions.GetPlayer(src)
+    
+    if not Player then return end
+
+    MySQL.query('SELECT * FROM player_loans WHERE citizenid = ? AND (status = ? OR status = ?)', {
+        Player.PlayerData.citizenid,
+        'active',
+        'collections'
+    }, function(result)
+        if result then
+            
+            for i, loan in ipairs(result) do
+                loan.next_payment_due_formatted = FormatTimestamp(loan.next_payment_due)
+                loan.created_at_formatted = FormatTimestamp(loan.created_at)
+            end
+            
+            TriggerClientEvent('bankloan:client:showLoanDetails', src, result)
+        else
+            TriggerClientEvent('bankloan:client:showLoanDetails', src, {})
         end
     end)
+end)
+
+
+RegisterNetEvent('bankloan:server:makePayment', function()
+    local src = source
+    local Player = RSGCore.Functions.GetPlayer(src)
+    
+    if not Player then return end
+
+    MySQL.query('SELECT * FROM player_loans WHERE citizenid = ? AND (status = ? OR status = ?) ORDER BY next_payment_due ASC LIMIT 1', {
+        Player.PlayerData.citizenid,
+        'active',
+        'collections'
+    }, function(result)
+        if not result or not result[1] then
+            TriggerClientEvent('ox_lib:notify', src, {
+                title = 'Bank',
+                description = 'No active loans found',
+                type = 'error'
+            })
+            return
+        end
+
+        local loan = result[1]
+        local paymentAmount = loan.weekly_payment
+
+       
+        if loan.status == 'collections' then
+            TriggerClientEvent('ox_lib:notify', src, {
+                title = 'Collections Account',
+                description = string.format('Your account is in collections. Minimum payment: $%d', paymentAmount),
+                type = 'warning',
+                duration = 8000
+            })
+        end
+
+       
+        if Player.PlayerData.money.cash < paymentAmount then
+            TriggerClientEvent('ox_lib:notify', src, {
+                title = 'Insufficient Funds',
+                description = string.format('You need $%d cash to make this payment', paymentAmount),
+                type = 'error'
+            })
+            return
+        end
+
+      
+        Player.Functions.RemoveMoney('cash', paymentAmount, "loan-payment")
+        
+        local newBalance = loan.remaining_balance - paymentAmount
+        local newPaymentsMade = loan.payments_made + 1
+        
+        if newBalance <= 0 or newPaymentsMade >= loan.total_payments then
+            
+            MySQL.update('UPDATE player_loans SET remaining_balance = 0, payments_made = ?, status = ? WHERE id = ?', {
+                newPaymentsMade,
+                'paid',
+                loan.id
+            })
+
+            TriggerClientEvent('ox_lib:notify', src, {
+                title = 'Loan Paid Off',
+                description = 'Congratulations! Your loan has been fully paid',
+                type = 'success',
+                duration = 8000
+            })
+
+            SendLoanLetter(src, {
+                title = 'Loan Completion',
+                content = string.format([[
+Congratulations!
+
+Your loan has been fully repaid.
+
+Loan ID: #%d
+Total Paid: $%d
+
+Your account is now clear and you may apply for future loans.
+
+Thank you for your business.
+
+- %s
+                ]], loan.id, loan.loan_amount + math.ceil(loan.loan_amount * loan.interest_rate / 100), Config.LetterSettings.Author)
+            })
+        else
+            
+            local newStatus = (loan.status == 'collections' and newBalance > 0) and 'active' or loan.status
+            
+            
+            local nextPaymentTimestamp = os.time() + (Config.LoanSettings.PaymentFrequency * 24 * 60 * 60)
+            local nextPaymentDate = os.date('%Y-%m-%d %H:%M:%S', nextPaymentTimestamp)
+            
+            MySQL.update('UPDATE player_loans SET remaining_balance = ?, payments_made = ?, next_payment_due = ?, status = ? WHERE id = ?', {
+                newBalance,
+                newPaymentsMade,
+                nextPaymentDate,
+                newStatus,
+                loan.id
+            })
+
+            local extraMsg = ""
+            if loan.status == 'collections' and newStatus == 'active' then
+                extraMsg = "\n\nYour account has been restored to good standing!"
+            end
+
+            TriggerClientEvent('ox_lib:notify', src, {
+                title = 'Payment Received',
+                description = string.format('Payment of $%d received\nRemaining balance: $%d%s', paymentAmount, newBalance, extraMsg),
+                type = 'success',
+                duration = 8000
+            })
+        end
+    end)
+end)
+
+function SendLoanLetter(src, letterData)
+    local Player = RSGCore.Functions.GetPlayer(src)
+    if not Player then return end
+
+    local info = {
+        title = letterData.title,
+        content = letterData.content,
+        author = letterData.author or Config.LetterSettings.Author
+    }
+
+   
+    local success = Player.Functions.AddItem(Config.LetterSettings.LetterItem, 1, false, info)
+    
+    if success then
+        TriggerClientEvent('inventory:client:ItemBox', src, RSGCore.Shared.Items[Config.LetterSettings.LetterItem], "add")
+        TriggerClientEvent('ox_lib:notify', src, {
+            title = 'Mail Received',
+            description = 'You have received a letter from the bank',
+            type = 'inform'
+        })
+    else
+       
+        TriggerClientEvent('ox_lib:notify', src, {
+            title = letterData.title,
+            description = 'Check your mail',
+            type = 'inform',
+            duration = 8000
+        })
+        
+        Wait(500)
+        TriggerClientEvent('bankloan:client:readLetter', src, info)
+    end
 end
+
+exports('SendLoanLetter', SendLoanLetter)
+

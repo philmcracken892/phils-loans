@@ -43,5 +43,9 @@ To read: Open inventory → Use letter item
 ✅ Pay on time to avoid fees
 ✅ Check "View Active Loans" at bank for balance
 
-no payments is law notifications for a waarant 
-
+⚡ Quick Commands
+Action	How
+Apply for Loan	Bank → Apply for Loan
+Make Payment	Bank → Make Payment
+Check Balance	Bank → View Active Loans
+Read Letter	Inventory → Use Letter

@@ -1,6 +1,6 @@
 local RSGCore = exports['rsg-core']:GetCoreObject()
 
--- Create blips for banks
+
 CreateThread(function()
     for _, bank in pairs(Config.BankLocations) do
         if bank.blip then
@@ -11,14 +11,14 @@ CreateThread(function()
     end
 end)
 
--- Bank interaction
+
 CreateThread(function()
-    for _, bank in pairs(Config.BankLocations) do
+    for i, bank in pairs(Config.BankLocations) do
         exports['rsg-core']:createPrompt(
-            'bank_loan_' .. _,
+            'bank_loan_' .. i,
             bank.coords,
-            0xD9D0E1C0, -- space key
-            'Open Loan Menu',
+            0xD9D0E1C0,
+            'Open Bank Menu',
             {
                 type = 'client',
                 event = 'bankloan:client:openMenu',
@@ -29,39 +29,37 @@ CreateThread(function()
     end
 end)
 
--- Open bank menu
-RegisterNetEvent('bankloan:client:openMenu', function()
-    local options = {
-        {
-            title = 'Apply for Loan',
-            description = 'Request a loan from the bank',
-            icon = 'fa-solid fa-hand-holding-dollar',
-            onSelect = function()
-                OpenLoanApplication()
-            end
-        },
-        {
-            title = 'View Active Loans',
-            description = 'Check your current loans',
-            icon = 'fa-solid fa-file-invoice-dollar',
-            onSelect = function()
-                TriggerServerEvent('bankloan:server:getActiveLoans')
-            end
-        },
-        {
-            title = 'Make Payment',
-            description = 'Pay off your loan',
-            icon = 'fa-solid fa-money-bill-wave',
-            onSelect = function()
-                TriggerServerEvent('bankloan:server:makePayment')
-            end
-        }
-    }
 
+RegisterNetEvent('bankloan:client:openMenu', function()
     lib.registerContext({
         id = 'bank_main_menu',
-        title = 'Loan Services',
-        options = options
+        title = 'Bank Services',
+        options = {
+            {
+                title = 'Apply for Loan',
+                description = 'Request a loan from the bank',
+                icon = 'fa-solid fa-hand-holding-dollar',
+                onSelect = function()
+                    OpenLoanApplication()
+                end
+            },
+            {
+                title = 'View Active Loans',
+                description = 'Check your current loans',
+                icon = 'fa-solid fa-file-invoice-dollar',
+                onSelect = function()
+                    TriggerServerEvent('bankloan:server:getActiveLoans')
+                end
+            },
+            {
+                title = 'Make Payment',
+                description = 'Pay off your loan',
+                icon = 'fa-solid fa-money-bill-wave',
+                onSelect = function()
+                    TriggerServerEvent('bankloan:server:makePayment')
+                end
+            }
+        }
     })
 
     lib.showContext('bank_main_menu')
@@ -107,43 +105,109 @@ RegisterNetEvent('bankloan:client:showLoanDetails', function(loans)
 
     local options = {}
     for _, loan in pairs(loans) do
-        local interestAmount = loan.loan_amount * (loan.interest_rate / 100)
-        local totalAmount = loan.loan_amount + interestAmount
+       
+        local displayDate = loan.next_payment_due_formatted or "Unknown"
+        
+       
+        local statusText = loan.status or "Unknown"
+        local statusIcon = 'fa-solid fa-file-invoice-dollar'
+        
+        if loan.status == 'collections' then
+            statusText = '?? COLLECTIONS'
+            statusIcon = 'fa-solid fa-triangle-exclamation'
+        elseif loan.status == 'active' then
+            statusText = 'Active'
+            statusIcon = 'fa-solid fa-circle-check'
+        elseif loan.status == 'paid' then
+            statusText = 'Paid Off'
+            statusIcon = 'fa-solid fa-check-circle'
+        end
         
         table.insert(options, {
-            title = 'Loan #' .. loan.id,
+            title = string.format('Loan #%d - %s', loan.id, statusText),
             description = string.format(
-                'Amount: $%d | Balance: $%d\nWeekly Payment: $%d\nPayments: %d/%d\nNext Due: %s',
+                'Amount Borrowed: $%d\nBalance Remaining: $%d\nWeekly Payment: $%d\n\nPayments: %d of %d completed\nInterest Rate: %.1f%%\n\nNext Payment Due:\n%s',
                 loan.loan_amount,
                 loan.remaining_balance,
                 loan.weekly_payment,
                 loan.payments_made,
                 loan.total_payments,
-                loan.next_payment_due
+                loan.interest_rate,
+                displayDate
             ),
-            icon = 'fa-solid fa-receipt',
+            icon = statusIcon,
         })
     end
 
+   
+    table.insert(options, {
+        title = 'Back to Bank Menu',
+        icon = 'fa-solid fa-arrow-left',
+        onSelect = function()
+            TriggerEvent('bankloan:client:openMenu')
+        end
+    })
+
     lib.registerContext({
         id = 'loan_details',
-        title = 'Your Active Loans',
-        menu = 'bank_main_menu',
+        title = 'Your Loan Details',
         options = options
     })
 
     lib.showContext('loan_details')
 end)
 
--- Read loan letter
+
 RegisterNetEvent('bankloan:client:readLetter', function(letterData)
-    lib.alertDialog({
-        header = letterData.title,
-        content = letterData.content,
-        centered = true,
-        cancel = false,
-        labels = {
-            confirm = 'Close'
+    if not letterData or not letterData.title or not letterData.content then
+        lib.notify({
+            title = 'Error',
+            description = 'Invalid letter data',
+            type = 'error'
+        })
+        return
+    end
+    
+   
+    local contentLines = {}
+    for line in letterData.content:gmatch("[^\n]+") do
+        if line and line ~= "" then
+            table.insert(contentLines, {
+                title = line,
+                readOnly = true
+            })
+        end
+    end
+    
+    
+    local options = {
+        {
+            title = 'From: ' .. (letterData.author or 'Unknown'),
+            icon = 'fa-solid fa-user',
+            readOnly = true
         }
+    }
+    
+    
+    for _, line in ipairs(contentLines) do
+        table.insert(options, line)
+    end
+    
+    
+    table.insert(options, {
+        title = 'Close Letter',
+        icon = 'fa-solid fa-times-circle',
+        onSelect = function()
+            lib.hideContext()
+        end
     })
+    
+    lib.registerContext({
+        id = 'read_letter',
+        title = '?? ' .. letterData.title,
+        options = options
+    })
+    
+    lib.showContext('read_letter')
 end)
+
