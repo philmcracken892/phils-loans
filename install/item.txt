@@ -1,0 +1,1 @@
+letter = { name = 'letter', label = 'letter', type = 'item',weight = 100, type = 'letter', image = 'letter.png',unique = true, useable = true, shouldClose = true, description = 'Bankletter' },
