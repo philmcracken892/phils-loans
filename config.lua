@@ -4,14 +4,22 @@ Config.LoanSettings = {
     MinLoanAmount = 50,
     MaxLoanAmount = 5000,
     InterestRates = {
-        [50] = 5,      -- $50-499: 5% interest
-        [500] = 7.5,   -- $500-999: 7.5% interest
-        [1000] = 10,   -- $1000-2499: 10% interest
-        [2500] = 12.5, -- $2500+: 12.5% interest
+        [50] = 5,
+        [500] = 7.5,
+        [1000] = 10,
+        [2500] = 12.5,
     },
-    PaymentFrequency = 7, -- Days between payments
-    LatePaymentPenalty = 10, -- 10% penalty for late payment
-    MaxActiveLoans = 1, -- Maximum active loans per player
+    PaymentFrequency = 7,
+    LatePaymentPenalty = 10,
+    MaxActiveLoans = 1,
+    
+    -- New: Overdue Consequences
+    EnableCollections = true,
+    CollectionsDays = 30,           -- Days until collections
+    AutoDeductAfterDays = 14,       -- Auto-take cash after X days
+    SeizeCashInCollections = true,  -- Take all cash when in collections
+    JailForCollections = false,     -- Send to jail (requires jail system)
+    JailTime = 30,                  -- Minutes in jail
 }
 
 Config.BankLocations = {
