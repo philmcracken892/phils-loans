@@ -7,9 +7,11 @@ CREATE TABLE IF NOT EXISTS `player_loans` (
     `interest_rate` float NOT NULL,
     `payments_made` int(11) DEFAULT 0,
     `total_payments` int(11) NOT NULL,
-    `next_payment_due` datetime NOT NULL,
-    `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
-    `status` varchar(20) DEFAULT 'active',
+    `next_payment_due` DATETIME NOT NULL,
+    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `status` varchar(20) DEFAULT 'active' COMMENT 'active, paid, collections',
     PRIMARY KEY (`id`),
-    KEY `citizenid` (`citizenid`)
+    KEY `citizenid` (`citizenid`),
+    KEY `status` (`status`),
+    KEY `next_payment_due` (`next_payment_due`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
